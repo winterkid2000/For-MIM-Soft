@@ -1,0 +1,56 @@
+import os
+import nibabel as nib
+from rt_utils import RTStructBuilder
+
+def check_z_alignment(ct_dicom_path, nifti_path):
+    dcm_files = [f for f in os.listdir(ct_dicom_path) if f.lower().endswith('.dcm')]
+    num_dcm_slices = len(dcm_files)
+
+    img = nib.load(nifti_path)
+    num_nifti_slices = img.get_fdata().shape[2]
+
+    if num_dcm_slices != num_nifti_slices:
+        raise ValueError(f"슬라이스 불일치 (DICOM: {num_dcm_slices}, NIfTI: {num_nifti_slices})")
+    return True
+
+def process_pre(patient_id, ct_base, seg_base, output_base):
+    dicom_path = os.path.join(ct_base, str(patient_id), "PRE")
+    mask_path = os.path.join(seg_base, str(patient_id), "PRE", "pancreas.nii.gz")
+    output_file = os.path.join(output_base, f"{patient_id}_PRE_rtstruct.dcm")
+
+    try:
+        if not os.path.isdir(dicom_path):
+            print(f"[!] 환자 {patient_id}: DICOM 폴더 없음 - {dicom_path}")
+            return
+
+        if not os.path.isfile(mask_path):
+            print(f"[!] 환자 {patient_id}: segmentation 없음 - {mask_path}")
+            return
+
+        check_z_alignment(dicom_path, mask_path)
+
+        os.makedirs(output_base, exist_ok=True)
+
+        rtstruct = RTStructBuilder.create_new(dicom_series_path=dicom_path)
+        rtstruct.add_roi(mask=mask_path, name="Pancreas")
+        rtstruct.save(output_file)
+
+        print(f"[✓] 환자 {patient_id} [PRE]: RTSTRUCT 저장 완료 → {output_file}")
+
+    except Exception as e:
+        print(f"[X] 환자 {patient_id} [PRE]: 오류 발생 → {str(e)}")
+
+def main():
+    print("=== RTSTRUCT 생성기 (PRE 대상, 분리된 segmentation + 별도 저장 경로) ===")
+    ct_base = input("① CT DICOM 루트 경로 입력 (예: \\...\\Pancreas_CT_normal): ").strip('" ')
+    seg_base = input("② segmentation 루트 경로 입력 (예: \\...\\segmentations): ").strip('" ')
+    output_base = input("③ RTSTRUCT 출력 루트 경로 입력 (예: \\...\\RTSTRUCT_Output): ").strip('" ')
+
+    for folder in sorted(os.listdir(ct_base)):
+        if folder.isdigit():
+            process_pre(folder, ct_base, seg_base, output_base)
+
+    print("\n[✓] 전체 환자 PRE RTSTRUCT 생성 완료.")
+
+if __name__ == "__main__":
+    main()
