@@ -1,0 +1,56 @@
+import os
+import nibabel as nib
+from rt_utils import RTStructBuilder
+
+def check_z_alignment(ct_dicom_path, nifti_path):
+    dcm_files = [f for f in os.listdir(ct_dicom_path) if f.lower().endswith('.dcm')]
+    num_dcm_slices = len(dcm_files)
+
+    img = nib.load(nifti_path)
+    num_nifti_slices = img.get_fdata().shape[2]
+
+    if num_dcm_slices != num_nifti_slices:
+        raise ValueError(f"슬라이스 불일치 (DICOM: {num_dcm_slices}, NIfTI: {num_nifti_slices})")
+    return True
+
+def process_patient(patient_id, base_path):
+    pre_path = os.path.join(base_path, str(patient_id), "PRE")
+    dicom_path = pre_path
+    mask_path = os.path.join(pre_path, "segmentations", "pancreas.nii.gz")
+    output_path = os.path.join(pre_path, "RTSTRUCT")
+    output_file = os.path.join(output_path, "rtstruct.dcm")
+
+    try:
+        if not os.path.isdir(dicom_path):
+            print(f"[!] 환자 {patient_id}: DICOM 폴더 없음 - {dicom_path}")
+            return
+
+        if not os.path.isfile(mask_path):
+            print(f"[!] 환자 {patient_id}: NIfTI 마스크 없음 - {mask_path}")
+            return
+
+        check_z_alignment(dicom_path, mask_path)
+
+        os.makedirs(output_path, exist_ok=True)
+
+        rtstruct = RTStructBuilder.create_new(dicom_series_path=dicom_path)
+        rtstruct.add_roi(mask=mask_path, name="Pancreas")
+        rtstruct.save(output_file)
+
+        print(f"[✓] 환자 {patient_id}: RTSTRUCT 저장 완료 → {output_file}")
+
+    except Exception as e:
+        print(f"[X] 환자 {patient_id}: 오류 발생 → {str(e)}")
+
+def main():
+    base_path = input("전체 환자 폴더의 루트 경로를 입력하세요 (예: \\\\...\\Pancreas_CT_normal): ").strip('" ')
+
+    # 환자 번호 폴더 반복 (1, 2, 3, ...)
+    for folder in sorted(os.listdir(base_path)):
+        if folder.isdigit():
+            process_patient(folder, base_path)
+
+    print("\n[✓] 전체 환자 처리 완료.")
+
+if __name__ == "__main__":
+    main()
