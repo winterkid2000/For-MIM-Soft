@@ -1,0 +1,93 @@
+import os
+import nibabel as nib
+from rt_utils import RTStructBuilder
+import pydicom
+
+def count_valid_dicom_slices(dicom_folder):
+    count = 0
+    for file in os.listdir(dicom_folder):
+        if file.lower().endswith('.dcm'):
+            try:
+                pydicom.dcmread(os.path.join(dicom_folder, file), stop_before_pixels=True)
+                count += 1
+            except Exception:
+                continue
+    return count
+
+def check_z_alignment(ct_dicom_path, nifti_path):
+    num_dcm_slices = count_valid_dicom_slices(ct_dicom_path)
+
+    try:
+        img = nib.load(nifti_path)
+        num_nifti_slices = img.get_fdata().shape[2]
+    except Exception as e:
+        raise ValueError(f"NIfTI 파일 로드 실패: {nifti_path} - {str(e)}")
+
+    if num_dcm_slices != num_nifti_slices:
+        raise ValueError(f"슬라이스 수 불일치 (DICOM: {num_dcm_slices}, NIfTI: {num_nifti_slices})")
+    return True
+
+def process_pre(patient_id, ct_base, seg_base, output_base):
+    dicom_path = os.path.normpath(os.path.join(ct_base, str(patient_id), "PRE"))
+    mask_path = os.path.normpath(os.path.join(seg_base, str(patient_id), "PRE", "pancreas.nii.gz"))
+    output_file = os.path.normpath(os.path.join(output_base, f"{patient_id}_PRE_rtstruct.dcm"))
+
+    try:
+        if not os.path.isdir(dicom_path):
+            print(f"환자 {patient_id}: DICOM 폴더 없음 - {dicom_path}")
+            return
+
+        if not os.path.isfile(mask_path):
+            print(f"환자 {patient_id}: segmentation 없음 - {mask_path}")
+            return
+
+        check_z_alignment(dicom_path, mask_path)
+
+        os.makedirs(output_base, exist_ok=True)
+
+        mask_img = nib.load(mask_path)
+        mask_data = mask_img.get_fdata()
+        binary_mask = mask_data > 0.5  # binary mask 처리
+
+        rtstruct = RTStructBuilder.create_new(dicom_series_path=dicom_path)
+        rtstruct.add_roi(mask=binary_mask, name="Pancreas")
+        rtstruct.save(output_file)
+
+        print(f"환자 {patient_id} [PRE]: RTSTRUCT 저장 완료 → {output_file}")
+
+    except Exception as e:
+        print(f"환자 {patient_id} [PRE]: 오류 발생 → {str(e)}")
+
+def main():
+    print("=== RTSTRUCT 생성기 (Pancreas 전용, PRE 단계) ===")
+    ct_base = input("① CT DICOM 루트 경로 입력 (예: \\...\\Pancreas_CT_normal): ").strip().strip('"')
+    seg_base = input("② segmentation 루트 경로 입력 (예: \\...\\segmentations): ").strip().strip('"')
+    output_base = input("③ RTSTRUCT 출력 루트 경로 입력 (예: \\...\\RTSTRUCT_Output): ").strip().strip('"')
+
+    ct_base = os.path.normpath(ct_base)
+    seg_base = os.path.normpath(seg_base)
+    output_base = os.path.normpath(output_base)
+
+    if not os.path.isdir(ct_base):
+        print(f"CT DICOM 루트 경로가 유효하지 않습니다: {ct_base}")
+        return
+
+    mode = input("④ 전체 환자 처리(1) 또는 특정 환자 ID만 처리(2)? [1/2]: ").strip()
+
+    if mode == '1':
+        for folder in sorted(os.listdir(ct_base)):
+            if folder.isdigit():
+                process_pre(folder, ct_base, seg_base, output_base)
+        print("\n전체 환자 PRE RTSTRUCT 생성 완료.")
+    elif mode == '2':
+        patient_id = input("⑤ 환자 ID 입력 (숫자만): ").strip()
+        if not patient_id.isdigit():
+            print("잘못된 환자 ID입니다. 숫자만 입력해주세요.")
+            return
+        process_pre(patient_id, ct_base, seg_base, output_base)
+        print(f"\n환자 {patient_id} PRE RTSTRUCT 생성 완료.")
+    else:
+        print("잘못된 선택입니다. 프로그램을 종료합니다.")
+
+if __name__ == "__main__":
+    main()
