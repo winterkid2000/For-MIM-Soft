@@ -61,6 +61,7 @@ def process_case(patient_id, phase, ct_base, seg_base, output_base):
         # (z, y, x) → (x, y, z) 변환 후 무조건 x축 반전
         mask_array = sitk.GetArrayFromImage(resampled_mask).transpose(2, 1, 0)
         mask_array = np.flip(mask_array, axis=0) 
+        mask_array = np.flip(mask_array, axis=2)
         mask_array = mask_array > 0
 
         rtstruct = RTStructBuilder.create_new(dicom_series_path=dicom_path)
