@@ -1,0 +1,96 @@
+import os
+import numpy as np
+import nibabel as nib
+import pydicom
+import SimpleITK as sitk
+from rt_utils import RTStructBuilder
+import glob
+
+def load_dicom_series(dicom_folder):
+    reader = sitk.ImageSeriesReader()
+    dicom_files = reader.GetGDCMSeriesFileNames(dicom_folder)
+    if not dicom_files:
+        raise ValueError("유효한 DICOM 시리즈 없음")
+    reader.SetFileNames(dicom_files)
+    return reader.Execute()
+
+def resample_mask_to_dicom(mask_nifti, dicom_image):
+    resampler = sitk.ResampleImageFilter()
+    resampler.SetReferenceImage(dicom_image)
+    resampler.SetInterpolator(sitk.sitkNearestNeighbor)
+    resampler.SetTransform(sitk.Transform())
+    return resampler.Execute(mask_nifti)
+
+def validate_spatial_alignment(dicom_image, nifti_image):
+    dicom_origin = np.array(dicom_image.GetOrigin())
+    dicom_spacing = np.array(dicom_image.GetSpacing())
+    dicom_direction = np.array(dicom_image.GetDirection()).reshape(3,3)
+
+    nifti_origin = np.array(nifti_image.GetOrigin())
+    nifti_spacing = np.array(nifti_image.GetSpacing())
+    nifti_direction = np.array(nifti_image.GetDirection()).reshape(3,3)
+
+    tolerance = 1e-3
+    if not np.allclose(dicom_origin, nifti_origin, atol=tolerance):
+        raise ValueError(f"원점 불일치\nDICOM: {dicom_origin}\nNIfTI: {nifti_origin}")
+    if not np.allclose(dicom_spacing, nifti_spacing, atol=tolerance):
+        raise ValueError(f"픽셀 간격 불일치\nDICOM: {dicom_spacing}\nNIfTI: {nifti_spacing}")
+    if not np.allclose(dicom_direction, nifti_direction, atol=tolerance):
+        raise ValueError(f"방향 매트릭스 불일치\nDICOM:\n{dicom_direction}\nNIfTI:\n{nifti_direction}")
+
+def process_post(patient_id, ct_base, seg_base, output_base):
+    dicom_path = os.path.join(ct_base, str(patient_id), "POST")
+    seg_folder = os.path.join(seg_base, f"{patient_id}_POST.nii")
+    nii_files = glob.glob(os.path.join(seg_folder, "*.nii*"))
+    if not nii_files:
+        print(f"환자 {patient_id} [POST]: NIfTI 파일 없음 → {seg_folder}")
+        return
+    mask_path = nii_files[0]
+
+    output_file = os.path.join(output_base, f"{patient_id}_POST_rtstruct.dcm")
+
+    try:
+        if not os.path.exists(dicom_path):
+            raise FileNotFoundError(f"DICOM 폴더 없음: {dicom_path}")
+        if not os.path.exists(mask_path):
+            raise FileNotFoundError(f"Segmentation 파일 없음: {mask_path}")
+
+        dicom_image = load_dicom_series(dicom_path)
+        mask_image = sitk.ReadImage(mask_path)
+        resampled_mask = resample_mask_to_dicom(mask_image, dicom_image)
+        validate_spatial_alignment(dicom_image, resampled_mask)
+
+        rtstruct = RTStructBuilder.create_new(dicom_series_path=dicom_path)
+        mask_array = sitk.GetArrayFromImage(resampled_mask).transpose(2, 1, 0)
+        mask_array = mask_array > 0
+        rtstruct.add_roi(mask=mask_array, name="Pancreas")
+
+        os.makedirs(output_base, exist_ok=True)
+        rtstruct.save(output_file)
+        print(f"환자 {patient_id} [POST]: RTSTRUCT 생성 성공 → {output_file}")
+
+    except Exception as e:
+        print(f"환자 {patient_id} [POST]: 오류 발생 → {str(e)}")
+
+def main():
+    print("=== RTSTRUCT 생성기 (Pancreas 전용, POST 단계) ===")
+    ct_base = input("CT DICOM 루트 경로: ").strip()
+    seg_base = input("Segmentation 루트 경로: ").strip()
+    output_base = input("출력 경로: ").strip()
+
+    mode = input("전체 처리(1) 또는 단일 환자(2): ").strip()
+
+    if mode == '1':
+        for folder in os.listdir(seg_base):
+            if folder.endswith("_POST.nii") and folder.split("_")[0].isdigit():
+                pid = folder.split("_")[0]
+                process_post(pid, ct_base, seg_base, output_base)
+        print("전체 처리 완료")
+    elif mode == '2':
+        pid = input("⑤ 환자 ID: ").strip()
+        process_post(pid, ct_base, seg_base, output_base)
+    else:
+        print("잘못된 선택")
+
+if __name__ == "__main__":
+    main()
